@@ -164,10 +164,10 @@ def backfill_archives(conn, total_days=730):
     chunk_end = now
     while (now - chunk_end).days < total_days:
         chunk_start = chunk_end - timedelta(days=30)
-        date_to   = chunk_end.strftime("%Y-%m-%dT%H:%M:%SZ")
-        date_from = chunk_start.strftime("%Y-%m-%dT%H:%M:%SZ")
+        date_to   = chunk_end.strftime("%Y-%m-%d")
+        date_from = chunk_start.strftime("%Y-%m-%d")
 
-        log.info(f"Chunk: {date_from[:10]} → {date_to[:10]}")
+        log.info(f"Chunk: {date_from} → {date_to}")
         new_chats, skip_count = _fetch_chunk(date_from, date_to, existing_ids)
 
         if new_chats:

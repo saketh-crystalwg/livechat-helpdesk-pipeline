@@ -113,58 +113,74 @@ def fetch_in_chunks(report_path, total_days, chunk_days=90):
 
 # ─── Archive Backfill (v2 API) ───────────────────────────────────────────────
 
-def backfill_archives(conn, page_size=100):
+def _fetch_chunk(date_from, date_to, existing_ids, page_size=25):
+    """Fetch one date-range chunk, return (new_chats, skip_count)."""
+    page       = 1
+    new_chats  = []
+    skip_count = 0
+    while True:
+        r = requests.get(
+            "https://api.livechatinc.com/v2/chats",
+            headers=_V2_HEADERS,
+            params={"count": page_size, "page": page,
+                    "date_from": date_from, "date_to": date_to},
+            timeout=60,
+        )
+        if r.status_code == 400:
+            log.warning(f"  400 at page {page} ({date_from} → {date_to}) — stopping chunk")
+            break
+        r.raise_for_status()
+        data  = r.json()
+        chats = data.get("chats", [])
+        if not chats:
+            break
+        for c in chats:
+            if c.get("id") not in existing_ids:
+                new_chats.append(c)
+            else:
+                skip_count += 1
+        total = data.get("total", 0)
+        if len(new_chats) + skip_count >= total or len(chats) < page_size:
+            break
+        page += 1
+    return new_chats, skip_count
+
+
+def backfill_archives(conn, total_days=730):
     """
-    Fetch all archived chats via v2 API with resume support.
-    Already-loaded chat IDs are skipped — safe to interrupt and re-run.
+    Fetch all archived chats via v2 API using monthly date chunks.
+    Bypasses the 1000-page API limit. Resumable — skips chats already in DB.
     """
-    # Get IDs already in DB to enable resume
     with conn.cursor() as cur:
         cur.execute("SELECT id FROM livechat.archives")
         existing_ids = {row[0] for row in cur.fetchall()}
     log.info(f"Archive backfill: {len(existing_ids):,} chats already in DB")
 
-    page       = 1
     total_new  = 0
     total_skip = 0
+    now        = datetime.utcnow()
 
-    while True:
-        r = requests.get(
-            "https://api.livechatinc.com/v2/chats",
-            headers=_V2_HEADERS,
-            params={"count": page_size, "page": page},
-            timeout=60,
-        )
-        r.raise_for_status()
-        data  = r.json()
-        chats = data.get("chats", [])
-        grand_total = data.get("total", 0)
+    # Walk backwards month by month
+    chunk_end = now
+    while (now - chunk_end).days < total_days:
+        chunk_start = chunk_end - timedelta(days=30)
+        date_to   = chunk_end.strftime("%Y-%m-%dT%H:%M:%SZ")
+        date_from = chunk_start.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-        if not chats:
-            break
-
-        # Filter out chats already in DB
-        new_chats = [c for c in chats if c.get("id") not in existing_ids]
-        skip_count = len(chats) - len(new_chats)
-        total_skip += skip_count
+        log.info(f"Chunk: {date_from[:10]} → {date_to[:10]}")
+        new_chats, skip_count = _fetch_chunk(date_from, date_to, existing_ids)
 
         if new_chats:
-            upsert(conn, "livechat.archives",     _transform_lc_archives(new_chats))
+            upsert(conn, "livechat.archives",      _transform_lc_archives(new_chats))
             upsert(conn, "livechat.chat_messages", _transform_lc_chat_messages(new_chats))
             for c in new_chats:
                 existing_ids.add(c.get("id"))
             total_new += len(new_chats)
 
-        loaded_so_far = len(existing_ids)
-        log.info(
-            f"Page {page:>4} | +{len(new_chats):>3} new | "
-            f"{skip_count:>3} skipped | {loaded_so_far:,}/{grand_total:,} total"
-        )
+        total_skip += skip_count
+        log.info(f"  +{len(new_chats)} new | {skip_count} skipped | {len(existing_ids):,} total in DB")
 
-        if loaded_so_far >= grand_total:
-            break
-
-        page += 1
+        chunk_end = chunk_start
 
     log.info(f"Archive backfill done: {total_new:,} new | {total_skip:,} skipped")
 

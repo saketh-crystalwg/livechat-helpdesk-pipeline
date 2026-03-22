@@ -84,7 +84,7 @@ def fetch_all_tickets():
     Deduplication happens in the transform layer.
     """
     all_tickets = []
-    for status in ["open", "pending", "closed"]:
+    for status in ["open", "pending", "closed", "solved"]:
         items = _get_all_pages("/tickets", extra_params={"status": status})
         log.info(f"HD tickets ({status}): {len(items)}")
         all_tickets.extend(items)

@@ -168,8 +168,9 @@ def fetch_tags():
 
 
 def _date_range(days_back):
+    today     = datetime.utcnow().date()
+    date_from = (today - timedelta(days=days_back)).strftime("%Y-%m-%dT00:00:00Z")
     date_to   = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-    date_from = (datetime.utcnow() - timedelta(days=days_back)).strftime("%Y-%m-%dT%H:%M:%SZ")
     return {"filters": {"from": date_from, "to": date_to}, "distribution": "day"}
 
 
